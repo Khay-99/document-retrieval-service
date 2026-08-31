@@ -1,93 +1,112 @@
 # document-retrieval-service
 
+A minimal Spring Boot service used as the App-layer application for the AWS platform
+build. It exposes two endpoints:
 
+| Method | Path                | Purpose                                                          |
+|--------|---------------------|-------------------------------------------------------------------|
+| GET    | `/health`           | Liveness check. Returns `OK`.                                     |
+| GET    | `/documents/{key}`  | Fetches the given object key from S3 and streams it back to the caller. |
 
-## Getting started
+There is no database and no queue. The only external dependency is one S3 bucket, and
+credentials are never configured directly — the app relies entirely on
+`DefaultCredentialsProvider`, which resolves to your local CLI profile on a laptop and to
+the EC2 instance's attached IAM role in every other environment.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 1. Build and run locally (optional, for quick iteration)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+Prerequisites: Java 17, Maven, an AWS CLI profile with read access to a test bucket.
 
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```bash
+mvn clean package
+AWS_REGION=eu-west-2 S3_BUCKET_NAME=your-test-bucket java -jar target/document-retrieval-service.jar
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/wandaprep/document-retrieval-service.git
-git branch -M main
-git push -uf origin main
+
+Then:
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/documents/some-object-key.txt
 ```
 
-## Integrate with your tools
+A 502 from `/documents/{key}` almost always means an IAM permissions problem, not a bug
+in the app — check the error message in the response body before assuming the code is
+broken.
 
-* [Set up project integrations](https://gitlab.com/wandaprep/document-retrieval-service/-/settings/integrations)
+## 2. Deploying via Launch Template + Auto Scaling Group (blueeagle-prod-app-lt / blueeagle-prod-app-asg)
 
-## Collaborate with your team
+This app is meant to run as a systemd service on every instance in the App tier's Auto
+Scaling Group, started automatically from the launch template's user data — never
+deployed by hand over SSH. That matters for the resilience story in the platform brief:
+whenever the ASG launches a replacement instance (because one failed a health check, or
+because it scaled out under load), that instance must come up running this service with
+zero manual steps.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### 2.1 One-time setup
 
-## Test and Deploy
+1. Push this repository to the `wandaprep` GitLab group (`git remote add origin git@gitlab.com:wandaprep/document-retrieval-service.git`).
+2. Confirm `blueeagle-prod-app-role` (least-privilege, `s3:GetObject` / `s3:PutObject` on your
+   one bucket) already exists — it gets attached via the launch template, not per instance.
+3. Open `scripts/user-data.sh` and replace the three `REPLACE_ME_*` placeholders with
+   your repo URL, region, and bucket name.
 
-Use the built-in continuous integration in GitLab.
+### 2.2 Create the Launch Template
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+In the EC2 console, under **Launch Templates**, create `blueeagle-prod-app-lt` with:
 
-***
+- **AMI:** Amazon Linux 2023
+- **Instance type:** t3.micro (or your account's free-tier equivalent)
+- **Key pair:** your existing key pair, for break-glass SSH access only
+- **Network settings:** `blueeagle-prod-app-sg` (inbound only from `blueeagle-prod-web-sg`,
+  nothing from the internet directly)
+- **IAM instance profile:** `blueeagle-prod-app-role`
+- **Tags:** apply the standard tag set from the platform brief (Name, Environment,
+  Project, ManagedBy, Owner) so every instance the ASG launches inherits them
+- **Advanced details → User data:** paste the full, edited contents of
+  `scripts/user-data.sh`
 
-# Editing this README
+### 2.3 Create the Auto Scaling Group
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Create `blueeagle-prod-app-asg` from this launch template:
 
-## Suggestions for a good README
+- **Subnets:** your private subnets, across at least two Availability Zones
+- **Load balancing:** attach it to the `blueeagle-prod-app-alb` target group (internal ALB)
+  rather than launching instances that aren't behind anything
+- **Health checks:** enable ELB health checks, not just EC2 status checks, so the ASG
+  reacts to the ALB's view of instance health, not just whether the host is up
+- **Group size:** a sensible min/desired/max (e.g. 2/2/4) — don't leave it at 1, or you
+  haven't actually built resilience, just a single instance with extra steps
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+### 2.4 Verify it came up correctly
 
-## Name
-Choose a self-explaining name for your project.
+SSH into an instance (via the Web tier or Session Manager) and check:
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```bash
+sudo systemctl status docservice
+journalctl -u docservice -n 100 --no-pager
+curl http://localhost:8080/health
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Then confirm in the `blueeagle-prod-app-alb` target group console that the instance shows as
+**healthy**, and that Nginx (pointed at the ALB's DNS name, not an instance IP) is
+successfully proxying through.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### 2.5 Why this matters for the resilience story
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Because the whole install-and-start process lives in the launch template's user data,
+recovering from a failed App instance should require nothing from you: terminate an
+instance, and the ASG launches a replacement from `blueeagle-prod-app-lt` in another
+Availability Zone, the new instance registers itself with `blueeagle-prod-app-alb`, and
+traffic resumes once its health check passes. If any step here still needs a human, that
+gap is exactly what should go in your troubleshooting notes.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## 3. Configuration reference
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+| Environment variable | Set where                                  | Purpose                        |
+|-----------------------|--------------------------------------------|---------------------------------|
+| `AWS_REGION`          | `docservice.service` (systemd Environment=) | Region for the S3 client        |
+| `S3_BUCKET_NAME`      | `docservice.service` (systemd Environment=) | Bucket the app is allowed to read/write |
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Neither value should ever be committed to this repo with a real bucket name — the
+placeholders in `scripts/docservice.service` are deliberately obvious so you don't forget
+to replace them per environment.

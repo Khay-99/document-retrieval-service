@@ -1,0 +1,16 @@
+[Unit]
+Description=Document Retrieval Service
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Environment=AWS_REGION=REPLACE_WITH_YOUR_REGION
+Environment=S3_BUCKET_NAME=REPLACE_WITH_YOUR_BUCKET_NAME
+ExecStart=/usr/bin/java -jar /opt/docservice/document-retrieval-service.jar
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target
