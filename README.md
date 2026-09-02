@@ -44,7 +44,7 @@ zero manual steps.
 
 ### 2.1 One-time setup
 
-1. Push this repository to the `wandaprep` GitLab group (`git remote add origin git@gitlab.com:wandaprep/document-retrieval-service.git`).
+1. This repository is hosted at `https://gitlab.com/wandaprep/document-retrieval-service.git` - clone it from there. When you submit your own completed work, push it to your own GitLab account, not back into the wandaprep group.
 2. Confirm `blueeagle-prod-app-role` (least-privilege, `s3:GetObject` / `s3:PutObject` on your
    one bucket) already exists — it gets attached via the launch template, not per instance.
 3. Open `scripts/user-data.sh` and replace the three `REPLACE_ME_*` placeholders with
