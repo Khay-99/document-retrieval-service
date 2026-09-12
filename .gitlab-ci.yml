@@ -40,10 +40,11 @@ build:
 
 publish:
   stage: publish
-  image: 
+
+  image:
     name: amazon/aws-cli:latest
     entrypoint: [""]
-      
+
   id_tokens:
     GITLAB_OIDC_TOKEN:
       aud: sts.amazonaws.com
@@ -54,11 +55,12 @@ publish:
     ARTIFACT_NAME: "document-retrieval-service.jar"
 
   script:
-    - echo "Authenticating GitLab CI to AWS..."
-    - echo "GitLab project ID: ${CI_PROJECT_ID}"
-    - echo "GitLab project path: ${CI_PROJECT_PATH}"
-    - echo "GitLab ref: ${CI_COMMIT_REF_NAME}"
-    - echo "GitLab ref type: ${CI_COMMIT_REF_TYPE}"
+    - echo "GitLab project ID = ${CI_PROJECT_ID}"
+    - echo "GitLab project path = ${CI_PROJECT_PATH}"
+    - echo "GitLab branch = ${CI_COMMIT_REF_NAME}"
+    - echo "GitLab commit = ${CI_COMMIT_SHA}"
+
+    - echo "Authenticating GitLab CI to AWS using OIDC..."
 
     - >
       AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
@@ -73,22 +75,13 @@ publish:
     - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
     - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
 
-   
-    # ------------------------------------------------------------
-    # Verify AWS identity
-    # ------------------------------------------------------------
+    - echo "Verifying AWS identity..."
     - aws sts get-caller-identity
 
-    # ------------------------------------------------------------
-    # Verify build artifact received from build job
-    # ------------------------------------------------------------
     - echo "Verifying application artifact..."
     - ls -lh target/
     - test -f "target/${ARTIFACT_NAME}"
 
-    # ------------------------------------------------------------
-    # Publish immutable application artifact
-    # ------------------------------------------------------------
     - echo "Publishing immutable artifact to S3..."
 
     - >
@@ -97,12 +90,11 @@ publish:
       "s3://${ARTIFACT_BUCKET}/document-retrieval-service/${CI_COMMIT_SHA}/${ARTIFACT_NAME}"
       --region "${AWS_REGION}"
 
-    # ------------------------------------------------------------
-    # Verify artifact publication
-    # ------------------------------------------------------------
     - echo "Verifying artifact publication..."
 
     - >
       aws s3 ls
       "s3://${ARTIFACT_BUCKET}/document-retrieval-service/${CI_COMMIT_SHA}/"
-      --region "${AWS_REGION}"    
+      --region "${AWS_REGION}"
+
+    - echo "Artifact publication completed successfully."
