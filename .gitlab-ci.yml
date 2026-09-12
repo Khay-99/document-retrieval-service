@@ -54,10 +54,11 @@ publish:
     ARTIFACT_NAME: "document-retrieval-service.jar"
 
   script:
-    # ------------------------------------------------------------
-    # Authenticate GitLab CI to AWS using OIDC
-    # ------------------------------------------------------------
     - echo "Authenticating GitLab CI to AWS..."
+    - echo "GitLab project ID: ${CI_PROJECT_ID}"
+    - echo "GitLab project path: ${CI_PROJECT_PATH}"
+    - echo "GitLab ref: ${CI_COMMIT_REF_NAME}"
+    - echo "GitLab ref type: ${CI_COMMIT_REF_TYPE}"
 
     - >
       AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
@@ -72,6 +73,7 @@ publish:
     - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
     - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
 
+   
     # ------------------------------------------------------------
     # Verify AWS identity
     # ------------------------------------------------------------
