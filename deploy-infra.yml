@@ -1,0 +1,37 @@
+stages:
+  - test
+  - build
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+cache:
+  key: maven
+  paths:
+    - .m2/repository/
+
+test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-17
+
+  script:
+    - java -version
+    - mvn -version
+    - mvn -B test
+
+build:
+  stage: build
+  image: maven:3.9-eclipse-temurin-17
+
+  script:
+    - java -version
+    - mvn -version
+    - mvn -B -DskipTests clean package
+    - ls -lh target/
+    - test -f target/document-retrieval-service.jar
+
+  artifacts:
+    name: "document-retrieval-service-$CI_COMMIT_SHA"
+    paths:
+      - target/document-retrieval-service.jar
+    expire_in: 1 day

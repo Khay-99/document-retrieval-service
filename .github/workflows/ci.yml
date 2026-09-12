@@ -1,0 +1,130 @@
+name: Document Retrieval Service - CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+   # Terraform
+  TF_WORKING_DIRECTORY: terraform/infrastructure
+  AWS_REGION: us-east-1
+  ARTIFACT_BUCKET: blueeagle-prod-app-doc-artifacts
+  ARTIFACT_NAME: document-retrieval-service.jar
+
+jobs:
+  build:
+    name: Test, Build and Publish Artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Verify Java and Maven
+        run: |
+          java -version
+          mvn -version
+
+      - name: Run tests
+        run: mvn -B test
+
+      - name: Build application
+        run: mvn -B -DskipTests clean package
+
+      - name: Verify JAR
+        run: |
+          ls -lh target/
+          test -f target/document-retrieval-service.jar
+
+
+      # ------------------------------------------------------------
+      # Authenticate GitHub Actions to AWS using OIDC
+      # ------------------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::651706774390:role/gitactions-tf-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ------------------------------------------------------------
+      # Publish immutable application artifact
+      # ------------------------------------------------------------
+      - name: Publish artifact to S3
+        run: |
+          aws s3 cp \
+            target/${{ env.ARTIFACT_NAME }} \
+            s3://${{ env.ARTIFACT_BUCKET }}/document-retrieval-service/${{ github.sha }}/${{ env.ARTIFACT_NAME }}
+ 
+      # ------------------------------------------------------------
+      # Verify artifact publication
+      # ------------------------------------------------------------
+      - name: Verify published artifact
+        run: |
+          aws s3 ls \
+            s3://${{ env.ARTIFACT_BUCKET }}/document-retrieval-service/${{ github.sha }}/
+
+
+      # ------------------------------------------------------------
+      # Set up Terraform
+      # ------------------------------------------------------------
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.1
+
+      # ------------------------------------------------------------
+      # Deploy infrastructure
+      # ------------------------------------------------------------
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform init
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform plan
+
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform apply -auto-approve
+
+      # ------------------------------------------------------------
+      # Point deployment to the immutable artifact
+      # ------------------------------------------------------------
+      - name: Update deployed artifact version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          ARTIFACT_KEY="document-retrieval-service/${GITHUB_SHA}/${ARTIFACT_NAME}"
+
+          echo "Deploying artifact:"
+          echo "${ARTIFACT_KEY}"
+
+          aws ssm put-parameter \
+            --name "/blueeagle/prod/document-retrieval-service/artifact-key" \
+            --value "${ARTIFACT_KEY}" \
+            --type "String" \
+            --overwrite \
+            --region "${AWS_REGION}"   
