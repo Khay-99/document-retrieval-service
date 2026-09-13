@@ -181,7 +181,7 @@ infra:
     # Terraform Apply
     # ------------------------------------------------------------
     - echo "Running Terraform Apply..."
-    - terraform apply -auto-approve
+    - terraform destroy -auto-approve
 
 
 # ------------------------------------------------------------
