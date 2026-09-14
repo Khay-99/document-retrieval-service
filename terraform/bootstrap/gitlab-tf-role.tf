@@ -4,12 +4,12 @@ module "gitlab_ci_tf_role" {
   role_name  = "gitlab-ci-tf-role"
   trust_type = "gitlab_oidc"
 
-  create_oidc_provider = false
+  create_oidc_provider = true
 
   gitlab_project_id = "85917214"
 
   gitlab_oidc_subjects = [
-    "project_path:wandaprep/document-retrieval-service:ref_type:branch:ref:main"
+    "project_path:wandaprep/document-retrieval-service:ref_type:branch:ref:*"
   ]
 
   gitlab_oidc_thumbprint = "3C4A8B66430EDDE6B6F03FD431E01A5E30FCE540"
