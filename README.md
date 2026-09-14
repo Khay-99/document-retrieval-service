@@ -9,7 +9,7 @@ The project demonstrates a **build-once, deploy-exact-artifact** application del
 ## Table of Contents
 
 * [Overview](#overview)
-* [Architecture](#architecture/architecture.png)
+* [Architecture](#architecture)
 * [Application](#application)
 * [CI/CD Pipeline](#cicd-pipeline)
 * [Immutable Artifact Deployment](#immutable-artifact-deployment)
@@ -50,51 +50,7 @@ The application has:
 
 ## Architecture
 
-```text
-                         ┌──────────────────────┐
-                         │      Developer       │
-                         │   Git Push / Merge   │
-                         └──────────┬───────────┘
-                                    │
-                         ┌──────────▼───────────┐
-                         │ GitHub Actions /     │
-                         │ GitLab CI             │
-                         └──────────┬───────────┘
-                                    │
-                       ┌────────────▼────────────┐
-                       │ Build + Test             │
-                       │ Java 17 + Maven          │
-                       └────────────┬────────────┘
-                                    │
-                       ┌────────────▼────────────┐
-                       │ Immutable S3 Artifact    │
-                       │ <commit-sha>/app.jar     │
-                       └────────────┬────────────┘
-                                    │
-                       ┌────────────▼────────────┐
-                       │ SSM Parameter Store      │
-                       │ Current Artifact Pointer │
-                       └────────────┬────────────┘
-                                    │
-                       ┌────────────▼────────────┐
-                       │ Auto Scaling Group       │
-                       │ Instance Refresh         │
-                       └────────────┬────────────┘
-                                    │
-                 ┌──────────────────▼──────────────────┐
-                 │             EC2 App Tier             │
-                 │                                     │
-                 │  Launch Template → User Data        │
-                 │  SSM → S3 → JAR → systemd           │
-                 └──────────────────┬──────────────────┘
-                                    │
-                       ┌────────────▼────────────┐
-                       │ Application Load        │
-                       │ Balancer                │
-                       └────────────┬────────────┘
-                                    │
-                         /health and /documents
-```
+![Architecture Diagram](architecture/architecture.png)
 
 All AWS infrastructure is managed through Terraform.
 
