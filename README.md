@@ -1,112 +1,129 @@
 # document-retrieval-service
 
-A minimal Spring Boot service used as the App-layer application for the AWS platform
-build. It exposes two endpoints:
+Reference implementation for the **BlueEagle Financial Services KYC Document
+Portal** used in the AWS Foundations sprint. A client (case/customer) has a
+reference number; against that reference they can upload verification
+documents and retrieve anything they've previously submitted. S3 itself,
+keyed by `{clientRef}/{filename}`, is the system of record — there is no
+database in this service.
 
-| Method | Path                | Purpose                                                          |
-|--------|---------------------|-------------------------------------------------------------------|
-| GET    | `/health`           | Liveness check. Returns `OK`.                                     |
-| GET    | `/documents/{key}`  | Fetches the given object key from S3 and streams it back to the caller. |
+This repo is the **application code** the Task Brief's Web/App-tier build
+steps deploy. Clone it to read and cross-check the code; it is not where you
+submit your own work (see **Submitting your own work**, below).
 
-There is no database and no queue. The only external dependency is one S3 bucket, and
-credentials are never configured directly — the app relies entirely on
-`DefaultCredentialsProvider`, which resolves to your local CLI profile on a laptop and to
-the EC2 instance's attached IAM role in every other environment.
-
-## 1. Build and run locally (optional, for quick iteration)
-
-Prerequisites: Java 17, Maven, an AWS CLI profile with read access to a test bucket.
-
-```bash
-mvn clean package
-AWS_REGION=eu-west-2 S3_BUCKET_NAME=your-test-bucket java -jar target/document-retrieval-service.jar
+```
+git clone https://gitlab.com/wandaprep/document-retrieval-service.git
 ```
 
-Then:
+## What's in this repo
 
-```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/documents/some-object-key.txt
+```
+document-retrieval-service/
+├── pom.xml
+├── src/main/java/io/blueeagle/docservice/
+│   ├── DocServiceApplication.java     # Spring Boot entry point
+│   ├── config/S3Config.java           # S3Client bean, DefaultCredentialsProvider
+│   └── controller/
+│       ├── HealthController.java      # GET /health - ALB target-group check
+│       └── DocumentController.java    # GET/PUT/LIST under /api/documents
+├── src/main/resources/
+│   ├── application.properties         # env-var driven region + bucket
+│   └── static/                        # the KYC portal landing page
+│       ├── index.html
+│       ├── css/portal.css
+│       └── js/portal.js
+└── scripts/
+    ├── user-data.sh                   # EC2 Launch Template bootstrap
+    └── docservice.service             # systemd unit
 ```
 
-A 502 from `/documents/{key}` almost always means an IAM permissions problem, not a bug
-in the app — check the error message in the response body before assuming the code is
-broken.
+## API
 
-## 2. Deploying via Launch Template + Auto Scaling Group (blueeagle-prod-app-lt / blueeagle-prod-app-asg)
+All endpoints are under `/api/documents` and use the client reference as an
+S3 key prefix.
 
-This app is meant to run as a systemd service on every instance in the App tier's Auto
-Scaling Group, started automatically from the launch template's user data — never
-deployed by hand over SSH. That matters for the resilience story in the platform brief:
-whenever the ASG launches a replacement instance (because one failed a health check, or
-because it scaled out under load), that instance must come up running this service with
-zero manual steps.
+| Method | Path | What it does |
+|---|---|---|
+| `PUT` | `/api/documents/{clientRef}/{filename}` | Upload a document (`multipart/form-data`, field `file`). Writes to S3 as `{clientRef}/{filename}`. Returns `201` with the stored key and size. |
+| `GET` | `/api/documents/{clientRef}/{filename}` | Stream a single document back out of S3 with its original content type. Returns `404` if the key doesn't exist. |
+| `GET` | `/api/documents/{clientRef}` | List every document on file for that client reference (filename, size, last-modified). Backs the portal's document table. |
+| `GET` | `/health` | Liveness check for `blueeagle-prod-app-alb`. Doesn't touch S3. |
 
-### 2.1 One-time setup
+No delete endpoint exists on purpose — the app-tier IAM role
+(`blueeagle-prod-app-role`) is scoped to `s3:GetObject`, `s3:PutObject` and
+`s3:ListBucket` on `blueeagle-prod-documents` only. It is not capable of
+`s3:DeleteObject`, so a compromised or buggy instance can add and read
+documents but can never destroy one.
 
-1. This repository is hosted at `https://gitlab.com/wandaprep/document-retrieval-service.git` - clone it from there. When you submit your own completed work, push it to your own GitLab account, not back into the wandaprep group.
-2. Confirm `blueeagle-prod-app-role` (least-privilege, `s3:GetObject` / `s3:PutObject` on your
-   one bucket) already exists — it gets attached via the launch template, not per instance.
-3. Open `scripts/user-data.sh` and replace the three `REPLACE_ME_*` placeholders with
-   your repo URL, region, and bucket name.
+## The landing page
 
-### 2.2 Create the Launch Template
+`src/main/resources/static/index.html` is served automatically by Spring
+Boot's static-resource handling at `/` — no separate web server or extra
+routing needed, the same jar serves the API and the UI. It's a thin,
+framework-free client (`js/portal.js`) over the three endpoints above:
 
-In the EC2 console, under **Launch Templates**, create `blueeagle-prod-app-lt` with:
+1. Enter a client reference and click **Load my documents** → calls
+   `GET /api/documents/{clientRef}`.
+2. Pick a file and click **Upload** → calls
+   `PUT /api/documents/{clientRef}/{filename}`, then reloads the list.
+3. Click **View / download** on any row → opens
+   `GET /api/documents/{clientRef}/{filename}` directly.
 
-- **AMI:** Amazon Linux 2023
-- **Instance type:** t3.micro (or your account's free-tier equivalent)
-- **Key pair:** your existing key pair, for break-glass SSH access only
-- **Network settings:** `blueeagle-prod-app-sg` (inbound only from `blueeagle-prod-web-sg`,
-  nothing from the internet directly)
-- **IAM instance profile:** `blueeagle-prod-app-role`
-- **Tags:** apply the standard tag set from the platform brief (Name, Environment,
-  Project, ManagedBy, Owner) so every instance the ASG launches inherits them
-- **Advanced details → User data:** paste the full, edited contents of
-  `scripts/user-data.sh`
+This is a reference UI, not a production KYC portal — there's no
+authentication in front of it, so anyone who knows (or guesses) a client
+reference can list and read that reference's documents. In a real system
+this would sit behind Cognito or an equivalent identity provider, with the
+client reference derived from the authenticated session rather than typed
+into a text box. That's a deliberate simplification, kept out of scope so
+the sprint stays focused on the compute/storage/networking build.
 
-### 2.3 Create the Auto Scaling Group
+## Running it locally
 
-Create `blueeagle-prod-app-asg` from this launch template:
-
-- **Subnets:** your private subnets, across at least two Availability Zones
-- **Load balancing:** attach it to the `blueeagle-prod-app-alb` target group (internal ALB)
-  rather than launching instances that aren't behind anything
-- **Health checks:** enable ELB health checks, not just EC2 status checks, so the ASG
-  reacts to the ALB's view of instance health, not just whether the host is up
-- **Group size:** a sensible min/desired/max (e.g. 2/2/4) — don't leave it at 1, or you
-  haven't actually built resilience, just a single instance with extra steps
-
-### 2.4 Verify it came up correctly
-
-SSH into an instance (via the Web tier or Session Manager) and check:
+Requires Java 17 and Maven, and AWS credentials for a bucket you control
+(a local AWS CLI profile is picked up automatically by
+`DefaultCredentialsProvider` — no keys are ever hardcoded).
 
 ```bash
-sudo systemctl status docservice
-journalctl -u docservice -n 100 --no-pager
-curl http://localhost:8080/health
+export AWS_REGION=eu-west-2
+export S3_BUCKET_NAME=your-test-bucket
+mvn spring-boot:run
 ```
 
-Then confirm in the `blueeagle-prod-app-alb` target group console that the instance shows as
-**healthy**, and that Nginx (pointed at the ALB's DNS name, not an instance IP) is
-successfully proxying through.
+Then open `http://localhost:8080` for the portal, or hit the API directly:
 
-### 2.5 Why this matters for the resilience story
+```bash
+curl -F "file=@passport.pdf" http://localhost:8080/api/documents/CUST-100482/passport.pdf -X PUT
+curl http://localhost:8080/api/documents/CUST-100482
+curl http://localhost:8080/api/documents/CUST-100482/passport.pdf -o passport.pdf
+```
 
-Because the whole install-and-start process lives in the launch template's user data,
-recovering from a failed App instance should require nothing from you: terminate an
-instance, and the ASG launches a replacement from `blueeagle-prod-app-lt` in another
-Availability Zone, the new instance registers itself with `blueeagle-prod-app-alb`, and
-traffic resumes once its health check passes. If any step here still needs a human, that
-gap is exactly what should go in your troubleshooting notes.
+## How it's deployed in the sprint environment
 
-## 3. Configuration reference
+`blueeagle-prod-app-lt` (the app-tier Launch Template) runs
+`scripts/user-data.sh` on every instance boot:
 
-| Environment variable | Set where                                  | Purpose                        |
-|-----------------------|--------------------------------------------|---------------------------------|
-| `AWS_REGION`          | `docservice.service` (systemd Environment=) | Region for the S3 client        |
-| `S3_BUCKET_NAME`      | `docservice.service` (systemd Environment=) | Bucket the app is allowed to read/write |
+1. Installs Java 17 and Maven.
+2. Clones this repo and runs `mvn clean package`.
+3. Copies the built jar to `/opt/docservice/`.
+4. Installs `scripts/docservice.service` as a systemd unit, with
+   `AWS_REGION` and `S3_BUCKET_NAME` substituted in from the Launch
+   Template's own instance metadata/environment.
+5. Enables and starts the service.
 
-Neither value should ever be committed to this repo with a real bucket name — the
-placeholders in `scripts/docservice.service` are deliberately obvious so you don't forget
-to replace them per environment.
+`blueeagle-prod-app-asg` launches every app-tier instance from that Launch
+Template, so there's one source of truth for what's running — this repo —
+never a hand-configured instance or a golden AMI drifting out of sync.
+
+## Submitting your own work
+
+This repository is the **clone source** only — it's how you read and
+cross-check the reference implementation. You do not have write access to
+it, and your own build does not get pushed here.
+
+Push your own completed work to your **own** GitLab account, not into the
+`wandaprep` group:
+
+```bash
+git remote add origin git@gitlab.com:<your-username>/document-retrieval-service.git
+git push -u origin main
+```

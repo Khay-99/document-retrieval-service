@@ -1,42 +1,36 @@
 #!/bin/bash
-# ------------------------------------------------------------------------------------
-# Launch-template user data for blueeagle-prod-app-lt (App tier).
-#
-# Paste this into the "User data" field when you create the blueeagle-prod-app-lt Launch
-# Template. Every instance the blueeagle-prod-app-asg Auto Scaling Group launches from this
-# template runs this script on first boot. Replace the REPLACE_ME values before saving
-# the template. Amazon Linux 2023 is assumed as the base AMI.
-#
-# What this does on first boot:
-#   1. Installs Java 17 and git
-#   2. Clones this repository
-#   3. Builds the jar with Maven
-#   4. Installs it as a systemd service so it survives reboots and instance replacement
-#   5. Starts the service
-# ------------------------------------------------------------------------------------
+# EC2 Launch Template user-data for blueeagle-prod-app-lt.
+# Installs Java 17, builds document-retrieval-service from source, and
+# installs it as a systemd service. Every instance the app-tier Auto
+# Scaling Group launches runs this same script - there is no golden AMI to
+# keep in sync, the source of truth is this repository.
+
 set -euo pipefail
 
-GIT_REPO_URL="REPLACE_ME_WITH_YOUR_GITHUB_REPO_URL"
-AWS_REGION_VALUE="REPLACE_ME_WITH_YOUR_REGION"
-S3_BUCKET_VALUE="REPLACE_ME_WITH_YOUR_BUCKET_NAME"
+AWS_REGION="__AWS_REGION__"
+S3_BUCKET_NAME="__S3_BUCKET_NAME__"
+REPO_URL="https://gitlab.com/wandaprep/document-retrieval-service.git"
+BUILD_DIR="/opt/build/document-retrieval-service"
+INSTALL_DIR="/opt/docservice"
 
-APP_DIR="/opt/docservice"
-BUILD_DIR="/opt/docservice-build"
+yum update -y
+yum install -y java-17-amazon-corretto git maven
 
-dnf install -y java-17-amazon-corretto git maven
+id -u docservice &>/dev/null || useradd -r -s /sbin/nologin docservice
 
-rm -rf "${BUILD_DIR}"
-git clone "${GIT_REPO_URL}" "${BUILD_DIR}"
-cd "${BUILD_DIR}"
+rm -rf "$BUILD_DIR"
+git clone "$REPO_URL" "$BUILD_DIR"
+cd "$BUILD_DIR"
+mvn -q clean package -DskipTests
 
-mvn -q -DskipTests clean package
+mkdir -p "$INSTALL_DIR"
+cp target/document-retrieval-service.jar "$INSTALL_DIR/document-retrieval-service.jar"
+chown -R docservice:docservice "$INSTALL_DIR"
 
-mkdir -p "${APP_DIR}"
-cp target/document-retrieval-service.jar "${APP_DIR}/document-retrieval-service.jar"
-
-cp "${BUILD_DIR}/scripts/docservice.service" /etc/systemd/system/docservice.service
-sed -i "s/REPLACE_WITH_YOUR_REGION/${AWS_REGION_VALUE}/" /etc/systemd/system/docservice.service
-sed -i "s/REPLACE_WITH_YOUR_BUCKET_NAME/${S3_BUCKET_VALUE}/" /etc/systemd/system/docservice.service
+sed \
+  -e "s/__AWS_REGION__/${AWS_REGION}/" \
+  -e "s/__S3_BUCKET_NAME__/${S3_BUCKET_NAME}/" \
+  "$BUILD_DIR/scripts/docservice.service" > /etc/systemd/system/docservice.service
 
 systemctl daemon-reload
 systemctl enable docservice
