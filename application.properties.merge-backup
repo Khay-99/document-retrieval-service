@@ -1,0 +1,20 @@
+server.port=8080
+
+<<<<<<< HEAD
+# AWS
+# Set these as real environment variables when the service runs (see the systemd unit in
+# scripts/docservice.service). Never hard-code a bucket name or region for a specific
+# environment directly into this file.
+aws.region=${AWS_REGION:us-east-1}
+=======
+# Both env-var driven so the exact same jar runs unchanged on any instance
+# in the blueeagle-prod-app-asg - only the launch template's environment
+# variables differ per environment, never the code or the artifact.
+aws.region=${AWS_REGION:eu-west-2}
+>>>>>>> origin/main
+aws.s3.bucket=${S3_BUCKET_NAME:}
+
+# KYC uploads can be scanned copies of passports/utility bills - allow up to
+# 25MB per file, comfortably above a typical scanned PDF or photo.
+spring.servlet.multipart.max-file-size=25MB
+spring.servlet.multipart.max-request-size=25MB
