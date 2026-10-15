@@ -48,7 +48,7 @@ publish:
 
   image:
     name: amazon/aws-cli:latest
-    entrypoint: [""]
+    entrypoint: [""]  
 
   id_tokens:
     GITLAB_OIDC_TOKEN:
@@ -491,6 +491,7 @@ validate_document:
 
   script:
     - echo "Getting ALB DNS name..."
+    - echo "AWS_REGION=${AWS_REGION}"
     - >
       ALB_DNS=$(aws elbv2 describe-load-balancers
       --names "blueeagle-prod-app-alb"
