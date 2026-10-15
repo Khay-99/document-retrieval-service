@@ -456,6 +456,7 @@ validate_alb:
 
 
 
+
 # ------------------------------------------------------------
 # Document endpoint validation
 # ------------------------------------------------------------
@@ -469,6 +470,11 @@ validate_document:
 
   needs:
     - job: validate_alb
+
+  variables:
+    AWS_REGION: "us-east-1"
+    CI_TEST_CLIENT_REF: "CI-TEST-001"
+    CI_TEST_FILENAME: "ci-validation-test.txt"
 
   id_tokens:
     GITLAB_OIDC_TOKEN:
@@ -490,8 +496,17 @@ validate_document:
     - aws sts get-caller-identity
 
   script:
+    - |
+      set -eu
+
+      if [ -z "${AWS_REGION:-}" ]; then
+        echo "ERROR: AWS_REGION is empty."
+        exit 1
+      fi
+
+      echo "Using AWS region: ${AWS_REGION}"
+
     - echo "Getting ALB DNS name..."
-    - echo "AWS_REGION=${AWS_REGION}"
     - >
       ALB_DNS=$(aws elbv2 describe-load-balancers
       --names "blueeagle-prod-app-alb"
@@ -504,29 +519,30 @@ validate_document:
     - |
       set -eu
 
-      # Create a dedicated, deterministic CI test fixture.
       EXPECTED_CONTENT="BlueEagle CI document validation test"
-      printf '%s' "${EXPECTED_CONTENT}" > "${TEST_FILENAME}"
+      printf '%s' "${EXPECTED_CONTENT}" > "${CI_TEST_FILENAME}"
 
       echo "Uploading dedicated CI test document..."
 
       curl --fail --silent --show-error \
         --request PUT \
-        --form "file=@${TEST_FILENAME}" \
-        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${TEST_FILENAME}"
+        --form "file=@${CI_TEST_FILENAME}" \
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${CI_TEST_FILENAME}"
 
       echo
-      echo "Downloading test document through ALB..."
+      echo "Downloading test document..."
 
       ACTUAL_CONTENT=$(curl --fail --silent --show-error \
-        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${TEST_FILENAME}")
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${CI_TEST_FILENAME}")
 
       if [ "${ACTUAL_CONTENT}" != "${EXPECTED_CONTENT}" ]; then
-        echo "ERROR: Downloaded document content does not match."
+        echo "ERROR: Downloaded content does not match expected content."
+        echo "Expected: ${EXPECTED_CONTENT}"
+        echo "Received: ${ACTUAL_CONTENT}"
         exit 1
       fi
 
-      echo "Document upload, download, and content validation passed."
+      echo "SUCCESS: Document upload, download, and content validation passed."
 
 
 # ------------------------------------------------------------
