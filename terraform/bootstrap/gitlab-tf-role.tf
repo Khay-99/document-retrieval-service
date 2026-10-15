@@ -4,7 +4,7 @@ module "gitlab_ci_tf_role" {
   role_name  = "gitlab-ci-tf-role"
   trust_type = "gitlab_oidc"
 
-  create_oidc_provider = true
+  create_oidc_provider = false
 
   gitlab_project_id = "85917214"
 

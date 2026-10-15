@@ -7,8 +7,8 @@ module "ec2_tf_role" {
 
 
   managed_policy_arns = [
-    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-    "arn:aws:iam::aws:policy/AdministratorAccess"  # This is for testing purposes only. Remove this in production.
+    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+    #"arn:aws:iam::aws:policy/AdministratorAccess"  # This is for testing purposes only. Remove this in production.
   ]
   inline_policy_statements = [
     {
@@ -20,7 +20,7 @@ module "ec2_tf_role" {
       ]
 
       Resource = [
-        "arn:aws:s3:::blueeagle-prod-app-documents/document-retrieval-service/*"
+        "arn:aws:s3:::blueeagle-prod-app-doc-artifacts/document-retrieval-service/*"
       ]
     },
     {
@@ -34,10 +34,11 @@ module "ec2_tf_role" {
       ]
     },
     {
-      Sid    = "AllowReadDocuments"
+      Sid    = "AllowReadWriteDocuments"
       Effect = "Allow"
       Action = [
-        "s3:GetObject"
+        "s3:GetObject",
+        "s3:PutObject"
       ]
       Resource = [
         "arn:aws:s3:::blueeagle-prod-app-documents/*"
