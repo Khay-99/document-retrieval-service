@@ -58,6 +58,9 @@ publish:
     AWS_REGION: "us-east-1"
     ARTIFACT_BUCKET: "blueeagle-prod-app-doc-artifacts"
     ARTIFACT_NAME: "document-retrieval-service.jar"
+    CLIENT_REF: "MUST-001"
+    TEST_FILENAME: "test-document.txt"
+
 
   script:
     - echo "GitLab project ID = ${CI_PROJECT_ID}"
@@ -452,6 +455,7 @@ validate_alb:
       exit 1
 
 
+
 # ------------------------------------------------------------
 # Document endpoint validation
 # ------------------------------------------------------------
@@ -469,9 +473,6 @@ validate_document:
   id_tokens:
     GITLAB_OIDC_TOKEN:
       aud: sts.amazonaws.com
-
-  variables:
-    AWS_REGION: "us-east-1"
 
   before_script:
     - echo "Authenticating GitLab CI to AWS..."
@@ -498,23 +499,33 @@ validate_document:
       --output text)
 
     - 'echo "ALB DNS: ${ALB_DNS}"'
-    - echo "Testing document endpoint through ALB..."
-
-    - >
-      RESPONSE=$(curl --fail --silent --show-error
-      "http://${ALB_DNS}/documents/test-document.txt")
-
-    - echo "Document response:"
-    - 'echo "${RESPONSE}"'
 
     - |
-      if [ "${RESPONSE}" != "Hello from BlueEagle document retrieval service" ]; then
-        echo "ERROR: Document endpoint returned unexpected content."
+      set -eu
+
+      # Create a dedicated, deterministic CI test fixture.
+      EXPECTED_CONTENT="BlueEagle CI document validation test"
+      printf '%s' "${EXPECTED_CONTENT}" > "${TEST_FILENAME}"
+
+      echo "Uploading dedicated CI test document..."
+
+      curl --fail --silent --show-error \
+        --request PUT \
+        --form "file=@${TEST_FILENAME}" \
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${TEST_FILENAME}"
+
+      echo
+      echo "Downloading test document through ALB..."
+
+      ACTUAL_CONTENT=$(curl --fail --silent --show-error \
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${TEST_FILENAME}")
+
+      if [ "${ACTUAL_CONTENT}" != "${EXPECTED_CONTENT}" ]; then
+        echo "ERROR: Downloaded document content does not match."
         exit 1
       fi
 
-      echo "Document endpoint validation passed."
-
+      echo "Document upload, download, and content validation passed."
 
 
 # ------------------------------------------------------------
