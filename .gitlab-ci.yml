@@ -1,0 +1,585 @@
+stages:
+  - test
+  - build
+  - publish
+  - infra
+  - deploy_pointer
+  - refresh
+  - validate
+  - summary
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+cache:
+  key: maven
+  paths:
+    - .m2/repository/
+
+test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-17
+
+  script:
+    - java -version
+    - mvn -version
+    - mvn -B test
+
+build:
+  stage: build
+  image: maven:3.9-eclipse-temurin-17
+
+  script:
+    - java -version
+    - mvn -version
+    - mvn -B -DskipTests clean package
+    - ls -lh target/
+    - test -f target/document-retrieval-service.jar
+
+  artifacts:
+    name: "document-retrieval-service-$CI_COMMIT_SHA"
+    paths:
+      - target/document-retrieval-service.jar
+    expire_in: 1 day
+
+
+publish:
+  stage: publish
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]  
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+    ARTIFACT_BUCKET: "blueeagle-prod-app-doc-artifacts"
+    ARTIFACT_NAME: "document-retrieval-service.jar"
+    CLIENT_REF: "MUST-001"
+    TEST_FILENAME: "test-document.txt"
+
+
+  script:
+    - echo "GitLab project ID = ${CI_PROJECT_ID}"
+    - echo "GitLab project path = ${CI_PROJECT_PATH}"
+    - echo "GitLab branch = ${CI_COMMIT_REF_NAME}"
+    - echo "GitLab commit = ${CI_COMMIT_SHA}"
+
+    - echo "Authenticating GitLab CI to AWS using OIDC..."
+
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+
+    - echo "Verifying AWS identity..."
+    - aws sts get-caller-identity
+
+    - echo "Verifying application artifact..."
+    - ls -lh target/
+    - test -f "target/${ARTIFACT_NAME}"
+
+    - echo "Publishing immutable artifact to S3..."
+
+    - >
+      aws s3 cp
+      "target/${ARTIFACT_NAME}"
+      "s3://${ARTIFACT_BUCKET}/document-retrieval-service/${CI_COMMIT_SHA}/${ARTIFACT_NAME}"
+      --region "${AWS_REGION}"
+
+    - echo "Verifying artifact publication..."
+
+    - >
+      aws s3 ls
+      "s3://${ARTIFACT_BUCKET}/document-retrieval-service/${CI_COMMIT_SHA}/"
+      --region "${AWS_REGION}"
+
+    - echo "Artifact publication completed successfully."
+
+
+
+infra:
+  stage: infra
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+    TF_WORKING_DIRECTORY: "terraform/infrastructure"
+    TERRAFORM_VERSION: "1.11.1"
+
+  before_script:
+    # ------------------------------------------------------------
+    # Authenticate GitLab CI to AWS using OIDC
+    # ------------------------------------------------------------
+    - echo "Authenticating GitLab CI to AWS..."
+
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+
+    # ------------------------------------------------------------
+    # Verify AWS identity
+    # ------------------------------------------------------------
+    - aws sts get-caller-identity
+
+    # ------------------------------------------------------------
+    # Install Terraform 1.11.1
+    # ------------------------------------------------------------
+    - echo "Installing Terraform ${TERRAFORM_VERSION}..."
+    - yum install -y unzip
+
+    - curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
+
+    - unzip -o /tmp/terraform.zip -d /usr/local/bin/
+    - terraform version
+
+  script:
+    # ------------------------------------------------------------
+    # Terraform Init
+    # ------------------------------------------------------------
+    - echo "Running Terraform Init..."
+    - cd "${TF_WORKING_DIRECTORY}"
+    - terraform init
+
+    # ------------------------------------------------------------
+    # Terraform Validate
+    # ------------------------------------------------------------
+    - echo "Running Terraform Validate..."
+    - terraform validate
+
+    # ------------------------------------------------------------
+    # Terraform Plan
+    # ------------------------------------------------------------
+    - echo "Running Terraform Plan..."
+    - terraform plan
+
+    # ------------------------------------------------------------
+    # Terraform Apply
+    # ------------------------------------------------------------
+    - echo "Running Terraform Apply..."
+    - terraform apply -auto-approve
+
+
+# ------------------------------------------------------------
+# Update SSM deployment pointer
+# ------------------------------------------------------------
+
+update_ssm_pointer:
+  stage: deploy_pointer
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+    ARTIFACT_BUCKET: "blueeagle-prod-app-doc-artifacts"
+    ARTIFACT_NAME: "document-retrieval-service.jar"
+
+  before_script:
+    - echo "Authenticating GitLab CI to AWS..."
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+    - aws sts get-caller-identity
+
+  script:
+    - echo "Updating SSM deployment pointer..."
+
+    - 'ARTIFACT_KEY="document-retrieval-service/${CI_COMMIT_SHA}/${ARTIFACT_NAME}"'
+
+    - 'echo "Artifact key: ${ARTIFACT_KEY}"'
+
+    - >
+      aws s3api head-object
+      --bucket "${ARTIFACT_BUCKET}"
+      --key "${ARTIFACT_KEY}"
+      --region "${AWS_REGION}"
+
+    - >
+      aws ssm put-parameter
+      --name "/blueeagle/prod/document-retrieval-service/artifact-key"
+      --value "${ARTIFACT_KEY}"
+      --type "String"
+      --overwrite
+      --region "${AWS_REGION}"
+
+    - echo "SSM deployment pointer updated successfully."
+
+    - >
+      aws ssm get-parameter
+      --name "/blueeagle/prod/document-retrieval-service/artifact-key"
+      --region "${AWS_REGION}"
+      --query 'Parameter.Value'
+      --output text
+
+
+# ------------------------------------------------------------
+# Start ASG instance refresh
+# ------------------------------------------------------------
+
+start_refresh:
+  needs:
+    - job: update_ssm_pointer
+  stage: refresh
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+
+  before_script:
+    - echo "Authenticating GitLab CI to AWS..."
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+    - aws sts get-caller-identity
+
+  script:
+    # --------------------------------------------------------
+    # Start ASG instance refresh
+    # --------------------------------------------------------
+
+    - echo "Starting ASG instance refresh..."
+
+    - >
+      INSTANCE_REFRESH_ID=$(aws autoscaling start-instance-refresh
+      --auto-scaling-group-name "blueeagle-prod-app-asg"
+      --preferences MinHealthyPercentage=50,InstanceWarmup=60
+      --region "${AWS_REGION}"
+      --query 'InstanceRefreshId'
+      --output text)
+
+    - 'echo "Instance refresh ID: ${INSTANCE_REFRESH_ID}"'
+
+    # Pass the refresh ID to the next job
+    - echo "INSTANCE_REFRESH_ID=${INSTANCE_REFRESH_ID}" > refresh.env
+
+  artifacts:
+    reports:
+      dotenv: refresh.env    
+
+
+# ------------------------------------------------------------
+# Wait for ASG instance refresh
+# ------------------------------------------------------------
+
+wait_refresh:
+  stage: refresh
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  needs:
+    - job: start_refresh
+      artifacts: true
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+
+  before_script:
+    - echo "Authenticating GitLab CI to AWS..."
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+    - aws sts get-caller-identity
+
+  script:
+    - 'echo "Waiting for ASG instance refresh: ${INSTANCE_REFRESH_ID}"'
+
+    - |
+      while true; do
+
+        STATUS=$(aws autoscaling describe-instance-refreshes \
+          --auto-scaling-group-name "blueeagle-prod-app-asg" \
+          --instance-refresh-ids "${INSTANCE_REFRESH_ID}" \
+          --region "${AWS_REGION}" \
+          --query 'InstanceRefreshes[0].Status' \
+          --output text)
+
+        echo "Current refresh status: ${STATUS}"
+
+        case "${STATUS}" in
+
+          Successful)
+            echo "ASG instance refresh completed successfully."
+            break
+            ;;
+
+          Failed|Cancelled|RollbackFailed|RollbackSuccessful)
+            echo "ERROR: ASG instance refresh ended with status: ${STATUS}"
+            exit 1
+            ;;
+
+          *)
+            echo "Refresh still in progress..."
+            sleep 15
+            ;;
+
+        esac
+
+      done      
+
+
+# ------------------------------------------------------------
+# ALB health validation
+# ------------------------------------------------------------
+
+validate_alb:
+  stage: validate
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  needs:
+    - job: wait_refresh
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  variables:
+    AWS_REGION: "us-east-1"
+
+  before_script:
+    - echo "Authenticating GitLab CI to AWS..."
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+    - aws sts get-caller-identity
+
+  script:
+    - echo "Getting ALB DNS name..."
+    - >
+      ALB_DNS=$(aws elbv2 describe-load-balancers
+      --names "blueeagle-prod-app-alb"
+      --region "${AWS_REGION}"
+      --query 'LoadBalancers[0].DNSName'
+      --output text)
+
+    - 'echo "ALB DNS: ${ALB_DNS}"'
+    - echo "Waiting for ALB health endpoint..."
+
+    - |
+      for attempt in {1..12}; do
+
+        if curl --fail --silent --show-error \
+          "http://${ALB_DNS}/health"; then
+
+          echo ""
+          echo "ALB health check passed."
+          exit 0
+        fi
+
+        echo "Attempt ${attempt}/12 failed. Retrying in 10 seconds..."
+        sleep 10
+
+      done
+
+      echo "ERROR: ALB health validation failed."
+      exit 1
+
+
+
+
+# ------------------------------------------------------------
+# Document endpoint validation
+# ------------------------------------------------------------
+
+validate_document:
+  stage: validate
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  needs:
+    - job: validate_alb
+
+  variables:
+    AWS_REGION: "us-east-1"
+    CI_TEST_CLIENT_REF: "CI-TEST-001"
+    CI_TEST_FILENAME: "ci-validation-test.txt"
+
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+
+  before_script:
+    - echo "Authenticating GitLab CI to AWS..."
+    - >
+      AWS_STS_OUTPUT=$(aws sts assume-role-with-web-identity
+      --role-arn "arn:aws:iam::651706774390:role/gitlab-ci-tf-role"
+      --role-session-name "GitLabRunner-${CI_PROJECT_ID}-${CI_PIPELINE_ID}"
+      --web-identity-token "${GITLAB_OIDC_TOKEN}"
+      --duration-seconds 3600
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'
+      --output text)
+    - export AWS_ACCESS_KEY_ID=$(echo "$AWS_STS_OUTPUT" | awk '{print $1}')
+    - export AWS_SECRET_ACCESS_KEY=$(echo "$AWS_STS_OUTPUT" | awk '{print $2}')
+    - export AWS_SESSION_TOKEN=$(echo "$AWS_STS_OUTPUT" | awk '{print $3}')
+    - aws sts get-caller-identity
+
+  script:
+    - |
+      set -eu
+
+      if [ -z "${AWS_REGION:-}" ]; then
+        echo "ERROR: AWS_REGION is empty."
+        exit 1
+      fi
+
+      echo "Using AWS region: ${AWS_REGION}"
+
+    - echo "Getting ALB DNS name..."
+    - >
+      ALB_DNS=$(aws elbv2 describe-load-balancers
+      --names "blueeagle-prod-app-alb"
+      --region "${AWS_REGION}"
+      --query 'LoadBalancers[0].DNSName'
+      --output text)
+
+    - 'echo "ALB DNS: ${ALB_DNS}"'
+
+    - |
+      set -eu
+
+      EXPECTED_CONTENT="BlueEagle CI document validation test"
+      printf '%s' "${EXPECTED_CONTENT}" > "${CI_TEST_FILENAME}"
+
+      echo "Uploading dedicated CI test document..."
+
+      curl --fail --silent --show-error \
+        --request PUT \
+        --form "file=@${CI_TEST_FILENAME}" \
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${CI_TEST_FILENAME}"
+
+      echo
+      echo "Downloading test document..."
+
+      ACTUAL_CONTENT=$(curl --fail --silent --show-error \
+        "http://${ALB_DNS}/api/documents/${CI_TEST_CLIENT_REF}/${CI_TEST_FILENAME}")
+
+      if [ "${ACTUAL_CONTENT}" != "${EXPECTED_CONTENT}" ]; then
+        echo "ERROR: Downloaded content does not match expected content."
+        echo "Expected: ${EXPECTED_CONTENT}"
+        echo "Received: ${ACTUAL_CONTENT}"
+        exit 1
+      fi
+
+      echo "SUCCESS: Document upload, download, and content validation passed."
+
+
+# ------------------------------------------------------------
+# Deployment summary
+# ------------------------------------------------------------
+
+deployment_summary:
+  stage: summary
+
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [""]
+
+  needs:
+    - job: validate_document
+
+  variables:
+    ARTIFACT_NAME: "document-retrieval-service.jar"
+
+  script:
+    - echo "=============================================="
+    - echo "BlueEagle deployment completed successfully"
+    - echo "=============================================="
+    - echo "Artifact:"
+    - 'echo "document-retrieval-service/${CI_COMMIT_SHA}/${ARTIFACT_NAME}"'
+    - echo ""
+    - echo "Deployment sequence:"
+    - echo "1. Build"
+    - echo "2. Test"
+    - echo "3. Publish SHA artifact"
+    - echo "4. Terraform infrastructure"
+    - echo "5. Update SSM pointer"
+    - echo "6. Start ASG instance refresh"
+    - echo "7. Wait for refresh"
+    - echo "8. ALB health validation"
+    - echo "9. Document endpoint validation"
+    - echo "=============================================="
+
+
+

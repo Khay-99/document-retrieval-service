@@ -1,0 +1,163 @@
+# ============================================================
+
+# Java / Maven
+
+# ============================================================
+
+# Compiled Java classes
+
+*.class
+
+# Maven build output
+
+target/
+
+# Java archives / packages
+
+*.jar
+*.war
+*.ear
+*.nar
+
+# Logs
+
+*.log
+
+# JVM crash logs
+
+hs_err_pid*
+replay_pid*
+
+# ============================================================
+
+# IDE / Editor
+
+# ============================================================
+
+.vscode/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# ============================================================
+
+# Terraform
+
+# ============================================================
+
+# Terraform working directories
+
+.terraform/
+**/.terraform/
+
+# Terraform state files
+
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform crash logs
+
+crash.log
+crash.*.log
+
+# Terraform variable files
+
+*.tfvars
+*.tfvars.json
+
+# Terraform plan files
+
+*.tfplan
+tfplan
+tfplan.*
+
+# Terraform override files
+
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform lock information
+
+.terraform.tfstate.lock.info
+
+# Terraform CLI configuration
+
+.terraformrc
+terraform.rc
+
+# ============================================================
+
+# Secrets / Credentials
+
+# ============================================================
+
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Environment / secret files
+
+.env
+.env.*
+!.env.example
+
+# ============================================================
+
+# Generated files
+
+# ============================================================
+
+generated/
+
+# ============================================================
+
+# Node / JavaScript
+
+# ============================================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ============================================================
+
+# Python
+
+# ============================================================
+
+**pycache**/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+ENV/
+
+# ============================================================
+
+# Kubernetes
+
+# ============================================================
+
+*.kubeconfig
+
+# ============================================================
+
+# OS generated files
+
+# ============================================================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+*.txt
+

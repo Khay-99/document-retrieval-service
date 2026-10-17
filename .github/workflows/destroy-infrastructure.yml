@@ -1,0 +1,65 @@
+name: Destroy BlueEagle Infrastructure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_WORKING_DIRECTORY: terraform/infrastructure
+
+jobs:
+  destroy:
+    name: Manual Terraform Destroy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # Set up Terraform
+      # ------------------------------------------------------------
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.1
+
+      # ------------------------------------------------------------
+      # Configure AWS credentials using GitHub OIDC
+      # ------------------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::651706774390:role/gitactions-tf-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ------------------------------------------------------------
+      # Terraform Init
+      # ------------------------------------------------------------
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform init
+
+      # ------------------------------------------------------------
+      # Show resources that Terraform manages
+      # ------------------------------------------------------------
+      - name: Terraform State
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform state list
+
+      # ------------------------------------------------------------
+      # Destroy infrastructure
+      # ------------------------------------------------------------
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_WORKING_DIRECTORY }}
+        run: |
+          terraform destroy -auto-approve
